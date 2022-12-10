@@ -1878,5 +1878,5 @@ $command "$@"
 
 echo "This branch of eth-docker has been deprecated."
 echo "Please migrate to the polygon-docker project if you are using Polygon."
-echo "Fantom will be moved to fantom-docker in due time."
+echo ""Please migrate to the fantom-docker project if you are using Fantom Opera.
 echo "Heco support has been discontinued."
