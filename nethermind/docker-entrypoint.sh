@@ -61,7 +61,8 @@ else
   fi
   __prune="--Pruning.FullPruningMaxDegreeOfParallelism=${__parallel}"
   if [ "${AUTOPRUNE_NM}" = true ]; then
-    __prune="${__prune} --Pruning.FullPruningTrigger=VolumeFreeSpace --Pruning.FullPruningThresholdMb=358400"
+  # Nethermind counts in Mb, 1,000,000 bytes, not MiB. 375810 Mb ~= 350 GiB
+    __prune="${__prune} --Pruning.FullPruningTrigger=VolumeFreeSpace --Pruning.FullPruningThresholdMb=375810"
   fi
   echo "Using pruning parameters:"
   echo "${__prune}"
