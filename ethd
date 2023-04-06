@@ -158,13 +158,13 @@ install() {
     read -rp "This will attempt to install docker and make your user part of the docker group. Do you wish to continue? (no/yes) " yn
     case $yn in
         [Yy]* ) ;;
-        * ) echo "Aborting, no changes made"; exit 0;;
+        * ) echo "Aborting, no changes made"; return 0;;
     esac
     if [[ "$__distro" = "ubuntu" ]]; then
         __major_version=$(lsb_release -r | cut -d: -f2 | sed s/'^\t'// | cut -d. -f1)
         if [ "${__major_version}" -lt 20 ]; then
             echo "This script cannot install docker on Ubuntu ${__major_version}. Consider upgrading to 22.04 or 20.04"
-            exit 0
+            return 0
         fi
         if [ -z "$(command -v docker)" ]; then
             ${__auto_sudo} apt-get update && ${__auto_sudo} apt-get install -y ca-certificates curl gnupg lsb-release whiptail bc chrony
@@ -194,7 +194,7 @@ install() {
             __major_version=$(lsb_release -r | cut -f2)
             if [ "${__major_version}" -lt 10 ]; then
                 echo "This script cannot install docker on Debian ${__major_version}. Consider upgrading to 11 or 12."
-                exit 0
+                return 0
             fi
             ${__auto_sudo} mkdir -p /etc/apt/keyrings
             ${__auto_sudo} curl -fsSL https://download.docker.com/linux/debian/gpg | ${__auto_sudo} gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -220,7 +220,7 @@ install() {
     fi
 
     if ! [[ "$__distro" = "ubuntu" ]] || [[ "$__distro" =~ "debian" ]]; then
-        exit 0
+        return 0
     fi
 
     # We only get here on Ubuntu or Debian
@@ -228,7 +228,7 @@ install() {
     if [ "${__install_base}" = "eth-docker" ]; then
         read -rp "Do you want to be able to call 'ethd' from anywhere? (yes/no) " yn
         case $yn in
-            [Nn]* ) exit 0;;
+            [Nn]* ) return 0;;
             * ) ;;
         esac
         if grep -q "alias ethd" ~/.profile; then
@@ -300,6 +300,7 @@ check_disk_space() {
 # Arguments are passed, but shellcheck doesn't recognize that
 # shellcheck disable=SC2120
 update() {
+    exitstatus=0
     if [[ $(${__as_owner} git status --porcelain) ]]; then
         __dirty=1
     else
@@ -333,16 +334,25 @@ update() {
 
     if [ -z "${ETHDSECUNDO-}" ]; then
         if ${__as_owner} git branch | grep -q master; then
-            ${__as_owner} git branch -m master main
-            ${__as_owner} git fetch origin
-            ${__as_owner} git branch -u origin/main main
-            ${__as_owner} git remote set-head origin -a
+            ${__as_owner} git branch -m master main || exitstatus=$?
+            ${__as_owner} git fetch origin || exitstatus=$?
+            ${__as_owner} git branch -u origin/main main || exitstatus=$?
+            ${__as_owner} git remote set-head origin -a || exitstatus=$?
+        fi
+        if [ "${exitstatus}" -ne 0 ]; then
+            echo "An error occured while switching to the main branch."
+            echo "Please fix this manually before attempting ethd update again."
+            return 1
         fi
         # Do not track changes to ext-network.yml
-        ${__as_owner} git update-index --assume-unchanged ext-network.yml
-        ${__as_owner} git config pull.rebase false
-        ${__as_owner} git pull
-        export GITEXITCODE=$?
+        ${__as_owner} git update-index --assume-unchanged ext-network.yml || exitstatus=$?
+        ${__as_owner} git config pull.rebase false || exitstatus=$?
+        ${__as_owner} git pull || exitstatus=$?
+        if [ "${exitstatus}" -ne 0 ]; then
+            echo "An error occured while attempting to pull updated eth-docker code."
+            echo "Please fix this manually before attempting ethd update again."
+            return 1
+        fi
         # BASH_SOURCE so newer code gets to do the update. Use an ENV var
         # to avoid infinite loop
         export ETHDSECUNDO=1
@@ -395,13 +405,17 @@ update() {
 
     dodocker system prune --force
     docompose --profile tools build --pull
-    exec 3>&1
-    exec 4>&2
-    exec 1> /dev/null
-    exec 2> /dev/null
-    docompose --profile tools pull --ignore-pull-failures || true
-    exec 1>&3
-    exec 2>&4
+    if [ "${__old_compose}" -eq 1 ]; then
+        exec 3>&1
+        exec 4>&2
+        exec 1> /dev/null
+        exec 2> /dev/null
+        docompose --profile tools pull || true
+        exec 1>&3
+        exec 2>&4
+    else
+        docompose --profile tools pull --ignore-buildable
+    fi
 
     echo
     if ! cmp -s "${ENV_FILE}" "${ENV_FILE}".source; then
@@ -444,17 +458,7 @@ reset to defaults."
         echo "Please take a look and adjust manually."
     fi
     echo
-    if [ -z "${GITEXITCODE+x}" ] || [ "${GITEXITCODE}" -eq 0 ]; then
-        echo "An \"./ethd up\" command will start using the new images and configuration."
-    else
-        echo "WARNING"
-        echo
-        echo "Updating eth-docker failed during \"git pull\""
-        echo
-        echo "Please try \"git pull\" manually."
-        echo "Do not run \"./ethd up\" until git can update eth-docker."
-        echo "The current partial update risks startup failure."
-    fi
+    echo "An \"./ethd up\" command will start using the new images and configuration."
     if [[ "$__distro" = "ubuntu" ]]; then
       __major_version=$(lsb_release -r | cut -d: -f2 | sed s/'^\t'// | cut -d. -f1)
       if [ "${__major_version}" -lt 20 ]; then
@@ -465,7 +469,6 @@ reset to defaults."
     fi
 
     unset ETHDSECUNDO
-    unset GITEXITCODE
     if [[ "${ETHDSWITCHED-}" -eq 1 ]]; then
         unset ETHDSWITCHED
         echo
@@ -882,19 +885,19 @@ prune-geth() {
                 ;;
             *)
                 echo "Error: Unknown option: $1" >&2
-                exit 1
+                return 1
                 ;;
         esac
     done
 
     if [ ! -f "./${ENV_FILE}" ]; then
         echo "${ENV_FILE} configuration file not found, aborting."
-        exit 1
+        return 1
     fi
 
     if ! grep -q '^COMPOSE_FILE=.*geth\.yml' "${ENV_FILE}" 2>/dev/null ; then
         echo "You do not appear to be using Geth, aborting."
-        exit 1
+        return 1
     fi
 
     # Check for archive node
@@ -902,7 +905,7 @@ prune-geth() {
     value=$(sed -n -e "s/^${var}=\(.*\)/\1/p" ".env" || true)
     if [[ "${value}" = "true" ]]; then
         echo "Geth is an archive node: Aborting."
-        return
+        return 1
     fi
 
     __docker_dir=$(dodocker system info --format '{{.DockerRootDir}}')
@@ -912,7 +915,7 @@ prune-geth() {
     if ! [[ "${__free_space}" =~ $re ]] ; then
         echo "Unable to determine free disk space. This is likely a bug."
         echo "df reports $(df -P "${__docker_dir}") and __free_space is ${__free_space}"
-        return
+        return 1
     fi
 
     if [ "${__free_space}" -lt 41943040 ]; then
@@ -920,14 +923,14 @@ prune-geth() {
         df -h "${__docker_dir}"
         echo ""
         echo "Aborting."
-        exit 1
+        return 1
     fi
 
     rpc_line=$(grep '^EL_RPC_PORT=' "${ENV_FILE}")
     regex='^EL_RPC_PORT=([0-9]+)'
     if [[ ! "${rpc_line}" =~ ${regex} ]]; then
         echo "Unable to determine EL_RPC_PORT, aborting."
-        exit 1
+        return 1
     else
         rpc_port="${BASH_REMATCH[1]}"
     fi
@@ -938,7 +941,7 @@ prune-geth() {
         echo "Unable to connect to Geth: Is it running?"
         echo "Output: ${sync_status}"
         echo "Aborting."
-        exit 1
+        return 1
     fi
 
     if [[ ! "${sync_status}" =~ "false" ]]; then
@@ -946,13 +949,13 @@ prune-geth() {
         echo "${sync_status}"
         echo ""
         echo "Aborting."
-        exit 1
+        return 1
     fi
 
     node_logs=$(docompose logs --no-color --tail 1000 execution)
     if [[ "${node_logs}" =~ "snapshot generation" && ! "${node_logs}" =~ "Generated state" ]]; then
         echo "Geth has not finished generating a state snapshot yet, aborting."
-        exit 1
+        return 1
     fi
 
     regex='\[([0-9][0-9]-[0-9][0-9])\|([0-9][0-9]:[0-9][0-9]):[0-9.]*\][[:space:]]*Generated state'
@@ -961,7 +964,7 @@ prune-geth() {
         now_time=$(date +"%s")
         if [ $((snap_time+2100)) -gt "$now_time" ]; then
             echo "Please wait 35 minutes after snapshot generation finished. Aborting."
-            exit 1
+            return 1
         fi
     fi
 
@@ -970,7 +973,7 @@ prune-geth() {
           read -rp "WARNING - this will stop Geth and prune its database. Do you wish to continue? (No/Yes) " yn
           case $yn in
               [Yy][Ee][Ss] ) break;;
-              * ) echo "Aborting, no changes made"; exit 1;;
+              * ) echo "Aborting, no changes made"; return 1;;
           esac
       done
     fi
@@ -1005,19 +1008,19 @@ prune-nethermind() {
                 ;;
             *)
                 echo "Error: Unknown option: $1" >&2
-                exit 1
+                return 1
                 ;;
         esac
     done
 
     if [ ! -f "./${ENV_FILE}" ]; then
         echo "${ENV_FILE} configuration file not found, aborting."
-        exit 1
+        return 1
     fi
 
     if ! grep -q '^COMPOSE_FILE=.*nethermind\.yml' "${ENV_FILE}" 2>/dev/null ; then
         echo "You do not appear to be using Nethermind, aborting."
-        exit 1
+        return 1
     fi
 
     # Check for archive node
@@ -1025,7 +1028,7 @@ prune-nethermind() {
     value=$(sed -n -e "s/^${var}=\(.*\)/\1/p" ".env" || true)
     if [[ "${value}" = "true" ]]; then
         echo "Nethermind is an archive node: Aborting."
-        return
+        return 1
     fi
 
     __docker_dir=$(dodocker system info --format '{{.DockerRootDir}}')
@@ -1035,7 +1038,7 @@ prune-nethermind() {
     if ! [[ "${__free_space}" =~ $re ]] ; then
         echo "Unable to determine free disk space. This is likely a bug."
         echo "df reports $(df -P "${__docker_dir}") and __free_space is ${__free_space}"
-        return
+        return 1
     fi
 
     if [ "${__free_space}" -lt 262144000 ]; then
@@ -1043,14 +1046,14 @@ prune-nethermind() {
         df -h "${__docker_dir}"
         echo ""
         echo "Aborting."
-        exit 1
+        return 1
     fi
 
     rpc_line=$(grep '^EL_RPC_PORT=' "${ENV_FILE}")
     regex='^EL_RPC_PORT=([0-9]+)'
     if [[ ! "${rpc_line}" =~ ${regex} ]]; then
         echo "Unable to determine EL_RPC_PORT, aborting."
-        exit 1
+        return 1
     else
         rpc_port="${BASH_REMATCH[1]}"
     fi
@@ -1061,7 +1064,7 @@ prune-nethermind() {
         echo "Unable to connect to Nethermind: Is it running?"
         echo "Output: ${sync_status}"
         echo "Aborting."
-        exit 1
+        return 1
     fi
 
     if [[ ! "${sync_status}" =~ "false" ]]; then
@@ -1069,7 +1072,7 @@ prune-nethermind() {
         echo "${sync_status}"
         echo ""
         echo "Aborting."
-        exit 1
+        return 1
     fi
 
     var="AUTOPRUNE_NM"
@@ -1083,7 +1086,7 @@ prune-nethermind() {
           read -rp "WARNING - this will prune Nethermind's database in the background. Do you wish to continue? (No/Yes) " yn
           case $yn in
               [Yy][Ee][Ss] ) break;;
-              * ) echo "Aborting, no changes made"; exit 1;;
+              * ) echo "Aborting, no changes made"; return 1;;
           esac
       done
     fi
@@ -1094,16 +1097,16 @@ prune-nethermind() {
 
     prune_result=$(docompose exec -T execution wget -qO- "http://localhost:1337" --header 'Content-Type: application/json' --post-data '{"jsonrpc":"2.0","method":"admin_prune","params":[],"id":1}')
     exitstatus=$?
-    if [ $exitstatus -ne 0 ]; then
+    if [ "${exitstatus}" -ne 0 ]; then
         echo "Unable to start prune, error code ${exitstatus}. This is likely a bug."
         echo "An attempt to run it returned this: ${prune_result}"
         echo 'The command attempted was: docker-compose run --rm set-prune-marker "curl -s --data {\\\"method\\\":\\\"admin_prune\\\",\\\"params\\\":[],\\\"id\\\":1,\\\"jsonrpc\\\":\\\"2.0\\\"} -H Content-Type:\ application/json http://execution:8545"'
-        exit ${exitstatus}
+        return ${exitstatus}
     fi
     echo "Nethermind returns ${prune_result}"
     if [[ ! "${prune_result}" =~ "Starting" ]]; then
         echo "Unable to start prune. This is likely a bug."
-        exit 1
+        return 1
     fi
     echo ""
     echo "Prune is running, you can observe it with './ethd logs -f --tail 50 execution'"
@@ -1288,7 +1291,7 @@ terminate() {
         read -rp "WARNING - this action will destroy all data stores for this Ethereum node. Do you wish to continue? (No/Yes) " yn
         case $yn in
             [Yy][Ee][Ss] ) break;;
-            * ) echo "Aborting, no changes made"; exit 1;;
+            * ) echo "Aborting, no changes made"; return 1;;
         esac
     done
 
@@ -2109,8 +2112,8 @@ fi
 
 $command "$@"
 
-__result=$?
-if [ "$__result" -eq 127 ]; then
+exitstatus=$?
+if [ "${exitstatus}" -eq 127 ]; then
     printhelp
 fi
 
@@ -2126,3 +2129,5 @@ if [ "${value}" = true ] && [ "${__old_compose}" -eq 1 ]; then
   echo "Please see https://eth-docker.net/Usage/Prerequisites#switching-from-dockerio-to-docker-ce for instructions."
   echo "You can turn this message off by adjusting COMPOSEV1_NAG in .env"
 fi
+
+exit "${exitstatus}"
