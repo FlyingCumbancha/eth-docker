@@ -2,19 +2,17 @@
 
 APP_NAME=$1
 TIMEOUT=${2:-60}  # Default timeout is 60 seconds if not provided
-INTERVAL=5
 
-while [ "${TIMEOUT}" -gt 0 ]; do
-    STATUS=$(docker-compose ps --services --filter "status=running" | grep "${APP_NAME}")
+# Give service a chance to start, and also to go into "Restarting" status
+sleep "${TIMEOUT}"
 
-    if [ -n "$STATUS" ]; then
-        echo "$APP_NAME is running."
-        exit 0
-    fi
+STATUS=$(docker-compose ps --services --filter "status=running" | grep "${APP_NAME}")
 
-    sleep "${INTERVAL}"
-    TIMEOUT=$((TIMEOUT - INTERVAL))
-done
+if [ -n "$STATUS" ]; then
+    echo "$APP_NAME is running."
+    exit 0
+fi
 
-echo "Timed out waiting for $APP_NAME to start."
+echo "$APP_NAME is either not started or restarting"
+docker-compose ps | grep "${APP_NAME}"
 exit 1
