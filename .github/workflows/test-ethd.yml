@@ -1,0 +1,22 @@
+name: Test ethd
+run-name: Test ethd
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, labeled, unlabeled]
+    branches: [main]
+
+jobs:
+  test-ethd:
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'test-ethd') ||
+      contains(github.event.pull_request.labels.*.name, 'test-all') ||
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Expect
+        run: sudo apt-get install -y expect
+      - name: Test ethd config
+        run: expect ./.github/test-ethd-config.exp

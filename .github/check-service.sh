@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 
-APP_NAME=$1
-TIMEOUT=${2:-60}  # Default timeout is 60 seconds if not provided
+__service=$1
 
-# Give service a chance to start, and also to go into "Restarting" status
-sleep "${TIMEOUT}"
+__containerID=$(docker-compose ps -q "${__service}")
 
-STATUS=$(docker-compose ps --services --filter "status=running" | grep "${APP_NAME}")
+__restart_count=$(docker inspect --format '{{ .RestartCount }}' "$__containerID")
+__running=$(docker inspect --format '{{ .State.Running }}' "$__containerID")
 
-if [ -n "$STATUS" ]; then
-    echo "$APP_NAME is running."
-    exit 0
+if [ "$__running" != "true" ] || [ "$__restart_count" -gt 0 ]; then
+  echo "$__service is either not running or continuously restarting"
+  docker-compose ps "${__service}"
+  docker-compose logs "${__service}"
+  exit 1
+else
+  echo "$__service is running"
+  docker-compose ps "${__service}"
+  exit 0
 fi
-
-echo "$APP_NAME is either not started or restarting"
-docker-compose ps | grep "${APP_NAME}"
-exit 1

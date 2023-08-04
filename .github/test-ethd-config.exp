@@ -137,7 +137,7 @@ proc no-grafana {} {
 }
 
 set timeout 5
-spawn ../ethd config
+spawn ./ethd config
 
 # Check for the command-line argument
 if {$argc > 0} {
