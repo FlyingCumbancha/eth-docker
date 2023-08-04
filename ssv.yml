@@ -28,7 +28,7 @@ services:
   ssv-generate-keys:
     profiles: ["tools"]
     restart: "no"
-    image: bloxstaking/ssv-node:${SSV_NODE_TAG:-latest}
+    image: bloxstaking/ssv-node-unstable:${SSV_NODE_TAG:-latest}
     command: /go/bin/ssvnode generate-operator-keys
 volumes:
   ssv-data:
